@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>relay</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Relay">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:     #0d0d0d;
+  --bg2:    #111111;
+  --bg3:    #171717;
+  --border: #1f1f1f;
+  --dim:    #444444;
+  --text:   #888888;
+  --bright: #cccccc;
+  --accent: #4499ee;
+  --green:  #44bb66;
+  --yellow: #bbaa33;
+  --red:    #cc4444;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 13px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Top bar ── */
+#topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.logo { color: var(--accent); letter-spacing: 4px; font-size: 14px; }
+#poll-status { color: var(--dim); font-size: 11px; }
+
+/* ── App ── */
+#app { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ── */
+#sidebar {
+  width: 210px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg2);
+  transition: width 0.18s ease;
+  overflow: hidden;
+}
+#sidebar.collapsed { width: 36px; }
+#sidebar.collapsed #chat-list,
+#sidebar.collapsed #new-chat-form { display: none !important; }
+#sidebar.collapsed #sidebar-header span,
+#sidebar.collapsed .new-btn { display: none; }
+#collapse-btn { color: var(--dim); border-color: transparent; padding: 3px 6px; font-size: 14px; line-height: 1; }
+#collapse-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+#sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+#sidebar-header span { color: var(--dim); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; }
+
+#chat-list { flex: 1; overflow-y: auto; }
+
+.chat-item {
+  padding: 9px 10px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+}
+.chat-item:hover { background: var(--bg3); }
+.chat-item.active { background: var(--bg3); border-left-color: var(--accent); }
+.chat-item-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
+.ci-name { color: var(--bright); font-size: 13px; }
+.ci-time { color: var(--dim); font-size: 10px; }
+.ci-preview { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ci-preview.unread { color: var(--text); }
+
+/* ── Main ── */
+#main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+#empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+
+#chat-view {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Chat header ── */
+#chat-header {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.ch-name { color: var(--bright); font-size: 14px; margin-bottom: 5px; }
+.ch-ids { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ch-id-group { display: flex; align-items: center; gap: 5px; }
+.id-badge {
+  font-size: 9px;
+  padding: 1px 4px;
+  border: 1px solid;
+  flex-shrink: 0;
+}
+.id-badge.sid { color: var(--yellow); border-color: var(--yellow); }
+.id-val { color: var(--dim); font-size: 11px; }
+
+/* ── Messages ── */
+#messages { flex: 1; overflow-y: auto; padding: 10px 14px; }
+
+.no-msgs { color: var(--dim); font-size: 11px; padding: 4px 0; }
+
+.msg {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  padding: 1px 0;
+  line-height: 1.65;
+}
+.msg-ts { color: var(--dim); font-size: 11px; flex-shrink: 0; margin-right: 8px; }
+.msg-nick {
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  min-width: 12ch;
+  text-align: right;
+}
+.msg.in  .msg-nick { color: var(--accent); }
+.msg.out .msg-nick { color: var(--green); }
+.msg-sep { color: var(--border); margin-right: 8px; flex-shrink: 0; }
+.msg-txt { color: var(--bright); word-break: break-word; }
+
+/* ── Compose ── */
+#compose-area {
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  padding: 9px 14px;
+  flex-shrink: 0;
+}
+
+.compose-row { display: flex; gap: 8px; }
+.compose-row input { flex: 1; }
+
+.compose-disabled {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.compose-disabled-hint { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.compose-disabled input { flex: 1; }
+
+/* ── Inputs / buttons ── */
+input[type=text] {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--bright);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 8px;
+  outline: none;
+}
+input[type=text]:focus { border-color: var(--accent); }
+
+button {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 5px 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.primary { border-color: var(--accent); color: var(--accent); }
+button.new-btn { color: var(--green); border-color: var(--green); padding: 3px 9px; font-size: 16px; line-height: 1; }
+
+/* ── Notification ── */
+#notif {
+  position: fixed;
+  bottom: 12px;
+  right: 14px;
+  padding: 5px 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  display: none;
+  z-index: 100;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">RELAY</div>
+  <div id="poll-status">--:--:--</div>
+</div>
+
+<div id="app">
+
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <button id="collapse-btn" onclick="toggleSidebar()" title="toggle sidebar">&#x2630;</button>
+      <span>chats</span>
+      <button class="new-btn" onclick="toggleNewChatForm()" title="new chat">+</button>
+    </div>
+    <div id="new-chat-form" style="display:none;padding:8px 10px;border-bottom:1px solid var(--border);gap:6px;flex-direction:column;background:var(--bg3);">
+      <input type="text" id="new-chat-name" placeholder="chat name..." onkeydown="if(event.key==='Enter')newChat();if(event.key==='Escape')toggleNewChatForm(false);" style="width:100%;">
+      <div style="display:flex;gap:6px;">
+        <button class="primary" onclick="newChat()" style="flex:1;">create</button>
+        <button onclick="toggleNewChatForm(false)">cancel</button>
+      </div>
+    </div>
+    <div id="chat-list"></div>
+  </div>
+
+  <div id="main">
+    <div id="empty-state">no chat selected</div>
+    <div id="chat-view">
+      <div id="chat-header"></div>
+      <div id="messages"></div>
+      <div id="compose-area"></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="notif"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const SERVER = 'http://137.184.117.89:5000';
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+
+const LS = {
+  load() {
+    return {
+      chats:    JSON.parse(localStorage.getItem('chats')    || '[]'),
+      messages: JSON.parse(localStorage.getItem('messages') || '{}'),
+    };
+  },
+  save(s) {
+    localStorage.setItem('chats',    JSON.stringify(s.chats));
+    localStorage.setItem('messages', JSON.stringify(s.messages));
+  },
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let currentChatId = null;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fullTs(epoch) {
+  return new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function shortTs(epoch) {
+  return new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function trunc(id) { return id.slice(0, 8) + '…' + id.slice(-4); }
+
+let notifTimer;
+function notify(msg, color) {
+  const el = document.getElementById('notif');
+  el.textContent = msg;
+  el.style.color = color || 'var(--bright)';
+  el.style.display = 'block';
+  clearTimeout(notifTimer);
+  notifTimer = setTimeout(() => el.style.display = 'none', 2800);
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => notify('copied', 'var(--green)'));
+}
+
+// ── Chat list ─────────────────────────────────────────────────────────────────
+
+function renderChatList() {
+  const { chats, messages } = LS.load();
+  const el = document.getElementById('chat-list');
+
+  if (!chats.length) {
+    el.innerHTML = '<div style="padding:12px 10px;color:var(--dim);font-size:11px">no chats — press + to start</div>';
+    return;
+  }
+
+  el.innerHTML = chats.map(chat => {
+    const msgs = messages[chat.id] || [];
+    const last = msgs[msgs.length - 1];
+    const active = chat.id === currentChatId ? ' active' : '';
+    const preview = last
+      ? (last.dir === 'out' ? '&gt; ' : '&lt; ') + esc(last.text.slice(0, 28))
+      : '<span style="font-style:italic">no messages</span>';
+    return `<div class="chat-item${active}" onclick="openChat('${chat.id}')">
+      <div class="chat-item-top">
+        <span class="ci-name">${esc(chat.name)}</span>
+        ${last ? `<span class="ci-time">${shortTs(last.ts)}</span>` : ''}
+      </div>
+      <div class="ci-preview">${preview}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Chat view ─────────────────────────────────────────────────────────────────
+
+function openChat(id) {
+  currentChatId = id;
+  renderChatList();
+  renderChatView();
+}
+
+function renderChatView() {
+  const { chats, messages } = LS.load();
+  const chat = chats.find(c => c.id === currentChatId);
+
+  if (!chat) {
+    document.getElementById('empty-state').style.display = 'flex';
+    document.getElementById('chat-view').style.display  = 'none';
+    return;
+  }
+
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('chat-view').style.display   = 'flex';
+
+  // header
+  document.getElementById('chat-header').innerHTML = `
+    <div class="ch-name">${esc(chat.name)}</div>
+    <div class="ch-ids">
+      <div class="ch-id-group">
+        <span class="id-badge sid">share to receive</span>
+        <span class="id-val">${trunc(chat.sid)}</span>
+        <button onclick="copyText('${chat.sid}')">copy</button>
+      </div>
+    </div>`;
+
+  // messages
+  const msgs = messages[chat.id] || [];
+  const msgEl = document.getElementById('messages');
+  const wasAtBottom = msgEl.scrollHeight - msgEl.scrollTop - msgEl.clientHeight < 40;
+
+  if (!msgs.length) {
+    msgEl.innerHTML = '<div class="no-msgs">no messages yet.</div>';
+  } else {
+    msgEl.innerHTML = msgs.map(m => {
+      const nick = m.dir === 'in' ? chat.name : 'you';
+      return `<div class="msg ${m.dir}">
+        <span class="msg-ts">[${fullTs(m.ts)}]</span>
+        <span class="msg-nick">&lt;${esc(nick)}&gt;</span>
+        <span class="msg-sep">|</span>
+        <span class="msg-txt">${esc(m.text)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  if (wasAtBottom || msgs.length <= 1) msgEl.scrollTop = msgEl.scrollHeight;
+
+  // compose
+  const composeEl = document.getElementById('compose-area');
+  if (chat.counterSid) {
+    composeEl.innerHTML = `
+      <div class="compose-row">
+        <input type="text" id="msg-input" placeholder="message..." onkeydown="if(event.key==='Enter')sendMessage()">
+        <button class="primary" onclick="sendMessage()">send</button>
+      </div>`;
+    setTimeout(() => document.getElementById('msg-input')?.focus(), 0);
+  } else {
+    composeEl.innerHTML = `
+      <div class="compose-disabled">
+        <span class="compose-disabled-hint">outbound disabled —</span>
+        <input type="text" id="counter-sid-input" placeholder="paste their sid to enable outbound...">
+        <button onclick="addCounterSid('${chat.id}')">add</button>
+      </div>`;
+  }
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+function toggleNewChatForm(show) {
+  const form = document.getElementById('new-chat-form');
+  const visible = show !== undefined ? show : form.style.display === 'none';
+  form.style.display = visible ? 'flex' : 'none';
+  if (visible) setTimeout(() => document.getElementById('new-chat-name')?.focus(), 0);
+  else document.getElementById('new-chat-name').value = '';
+}
+
+async function newChat() {
+  const nameEl = document.getElementById('new-chat-name');
+  const name = nameEl?.value.trim();
+  if (!name) return;
+
+  try {
+    const res = await fetch(`${SERVER}/queue`, { method: 'POST' });
+    if (!res.ok) throw new Error('server error');
+    const { sender_id, recipient_id } = await res.json();
+
+    const chatId = crypto.randomUUID();
+    const s = LS.load();
+    s.chats.push({
+      id:         chatId,
+      name:       name.trim(),
+      rid:        recipient_id,
+      sid:        sender_id,
+      counterSid: null,
+      createdAt:  Date.now(),
+    });
+    LS.save(s);
+
+    toggleNewChatForm(false);
+    openChat(chatId);
+    notify(`chat "${name}" created`, 'var(--green)');
+  } catch (e) {
+    notify('failed: ' + e.message, 'var(--red)');
+  }
+}
+
+async function sendMessage() {
+  const s = LS.load();
+  const chat = s.chats.find(c => c.id === currentChatId);
+  if (!chat?.counterSid) return;
+
+  const input = document.getElementById('msg-input');
+  const text  = input?.value.trim();
+  if (!text) return;
+
+  try {
+    const res = await fetch(`${SERVER}/send/${chat.counterSid}`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ message: text }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || res.status);
+
+    if (!s.messages[chat.id]) s.messages[chat.id] = [];
+    s.messages[chat.id].push({ text, ts: Date.now(), dir: 'out' });
+    LS.save(s);
+
+    input.value = '';
+    renderChatList();
+    renderChatView();
+  } catch (e) {
+    notify('send failed: ' + e.message, 'var(--red)');
+  }
+}
+
+function addCounterSid(chatId) {
+  const input = document.getElementById('counter-sid-input');
+  const sid   = input?.value.trim();
+  if (!sid) return;
+
+  const s    = LS.load();
+  const chat = s.chats.find(c => c.id === chatId);
+  if (!chat) return;
+
+  chat.counterSid = sid;
+  LS.save(s);
+  renderChatView();
+  notify('outbound enabled', 'var(--green)');
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+
+async function pollAll() {
+  const s = LS.load();
+  let newCount = 0;
+
+  for (const chat of s.chats) {
+    try {
+      const res = await fetch(`${SERVER}/receive/${chat.rid}/drain`);
+      if (!res.ok) continue;
+      const { messages } = await res.json();
+      if (messages?.length) {
+        if (!s.messages[chat.id]) s.messages[chat.id] = [];
+        for (const text of messages) {
+          s.messages[chat.id].push({ text, ts: Date.now(), dir: 'in' });
+          newCount++;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (newCount) {
+    LS.save(s);
+    renderChatList();
+    if (currentChatId) renderChatView();
+    notify(`${newCount} new message${newCount > 1 ? 's' : ''}`, 'var(--accent)');
+  }
+
+  document.getElementById('poll-status').textContent =
+    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+setInterval(pollAll, 5000);
+pollAll();
+renderChatList();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js');
+}
+</script>
+</body>
+</html>
