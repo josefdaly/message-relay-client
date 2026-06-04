@@ -137,6 +137,29 @@ body {
 .id-badge.sid { color: var(--yellow); border-color: var(--yellow); }
 .id-val { color: var(--dim); font-size: 11px; }
 
+.group-members {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.member-tag {
+  font-size: 10px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+}
+
+.add-member-form {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.add-member-form input { width: 100%; }
+.add-member-form .row { display: flex; gap: 6px; }
+
 /* ── Messages ── */
 #messages { flex: 1; overflow-y: auto; padding: 10px 14px; }
 
@@ -193,6 +216,8 @@ input[type=text] {
 }
 input[type=text]:focus { border-color: var(--accent); }
 
+input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
+
 button {
   background: var(--bg3);
   border: 1px solid var(--border);
@@ -243,6 +268,10 @@ button.new-btn { color: var(--green); border-color: var(--green); padding: 3px 9
     </div>
     <div id="new-chat-form" style="display:none;padding:8px 10px;border-bottom:1px solid var(--border);gap:6px;flex-direction:column;background:var(--bg3);">
       <input type="text" id="new-chat-name" placeholder="chat name..." onkeydown="if(event.key==='Enter')newChat();if(event.key==='Escape')toggleNewChatForm(false);" style="width:100%;">
+      <label style="display:flex;align-items:center;gap:6px;color:var(--text);font-size:11px;cursor:pointer;">
+        <input type="checkbox" id="new-chat-group" onchange="toggleGroupFields()"> group chat
+      </label>
+      <input type="text" id="new-chat-myname" placeholder="your name in this group..." style="display:none;width:100%;">
       <div style="display:flex;gap:6px;">
         <button class="primary" onclick="newChat()" style="flex:1;">create</button>
         <button onclick="toggleNewChatForm(false)">cancel</button>
@@ -388,12 +417,16 @@ function renderChatList() {
     const msgs = messages[chat.id] || [];
     const last = msgs[msgs.length - 1];
     const active = chat.id === currentChatId ? ' active' : '';
-    const preview = last
-      ? (last.dir === 'out' ? '&gt; ' : '&lt; ') + esc(last.text.slice(0, 28))
+    const prefix = chat.type === 'group' ? '# ' : '';
+    const previewText = last
+      ? (last.from ? `${last.from}: ` : (last.dir === 'out' ? '> ' : '< ')) + last.text.slice(0, 28)
+      : null;
+    const preview = previewText
+      ? esc(previewText)
       : '<span style="font-style:italic">no messages</span>';
     return `<div class="chat-item${active}" onclick="openChat('${chat.id}')">
       <div class="chat-item-top">
-        <span class="ci-name">${esc(chat.name)}</span>
+        <span class="ci-name">${prefix}${esc(chat.name)}</span>
         ${last ? `<span class="ci-time">${shortTs(last.ts)}</span>` : ''}
       </div>
       <div class="ci-preview">${preview}</div>
@@ -422,18 +455,13 @@ function renderChatView() {
   document.getElementById('empty-state').style.display = 'none';
   document.getElementById('chat-view').style.display   = 'flex';
 
-  // header
   const shareStr = chat.publicKeyB64 ? `${chat.sid}|${chat.publicKeyB64}` : chat.sid;
-  const encBadge = chat.theirPublicKeyB64 ? '<span class="id-badge" style="color:var(--green);border-color:var(--green)">e2e</span>' : '';
-  document.getElementById('chat-header').innerHTML = `
-    <div class="ch-name">${esc(chat.name)} ${encBadge}</div>
-    <div class="ch-ids">
-      <div class="ch-id-group">
-        <span class="id-badge sid">share to receive</span>
-        <span class="id-val">${trunc(chat.sid)}</span>
-        <button onclick="copyText('${shareStr.replace(/'/g, "\\'")}')">copy</button>
-      </div>
-    </div>`;
+
+  if (chat.type === 'group') {
+    renderGroupHeader(chat, shareStr);
+  } else {
+    renderDirectHeader(chat, shareStr);
+  }
 
   // messages
   const msgs = messages[chat.id] || [];
@@ -444,12 +472,15 @@ function renderChatView() {
     msgEl.innerHTML = '<div class="no-msgs">no messages yet.</div>';
   } else {
     msgEl.innerHTML = msgs.map(m => {
-      const nick = m.dir === 'in' ? chat.name : 'you';
+      const nick = m.dir === 'out' ? 'you' : (m.from || chat.name);
+      const deliveredMark = m.dir === 'out' && m.msgId
+        ? `<span style="color:${m.delivered ? 'var(--green)' : 'var(--dim)'};font-size:10px;margin-left:5px">${m.delivered ? '✓' : '·'}</span>`
+        : '';
       return `<div class="msg ${m.dir}">
         <span class="msg-ts">[${fullTs(m.ts)}]</span>
         <span class="msg-nick">&lt;${esc(nick)}&gt;</span>
         <span class="msg-sep">|</span>
-        <span class="msg-txt">${esc(m.text)}</span>
+        <span class="msg-txt">${esc(m.text)}${deliveredMark}</span>
       </div>`;
     }).join('');
   }
@@ -458,21 +489,84 @@ function renderChatView() {
 
   // compose
   const composeEl = document.getElementById('compose-area');
-  if (chat.counterSid) {
-    composeEl.innerHTML = `
-      <div class="compose-row">
-        <input type="text" id="msg-input" placeholder="message..." onkeydown="if(event.key==='Enter')sendMessage()">
-        <button class="primary" onclick="sendMessage()">send</button>
-      </div>`;
-    setTimeout(() => document.getElementById('msg-input')?.focus(), 0);
+  if (chat.type === 'group') {
+    if (chat.members.length > 0) {
+      composeEl.innerHTML = `
+        <div class="compose-row">
+          <input type="text" id="msg-input" placeholder="message..." onkeydown="if(event.key==='Enter')sendMessage()">
+          <button class="primary" onclick="sendMessage()">send</button>
+        </div>`;
+      setTimeout(() => document.getElementById('msg-input')?.focus(), 0);
+    } else {
+      composeEl.innerHTML = `
+        <div class="compose-disabled">
+          <span class="compose-disabled-hint">no members yet — add some above</span>
+        </div>`;
+    }
   } else {
-    composeEl.innerHTML = `
-      <div class="compose-disabled">
-        <span class="compose-disabled-hint">outbound disabled —</span>
-        <input type="text" id="counter-sid-input" placeholder="paste their sid|key to enable outbound...">
-        <button onclick="addCounterSid('${chat.id}')">add</button>
-      </div>`;
+    if (chat.counterSid) {
+      composeEl.innerHTML = `
+        <div class="compose-row">
+          <input type="text" id="msg-input" placeholder="message..." onkeydown="if(event.key==='Enter')sendMessage()">
+          <button class="primary" onclick="sendMessage()">send</button>
+        </div>`;
+      setTimeout(() => document.getElementById('msg-input')?.focus(), 0);
+    } else {
+      composeEl.innerHTML = `
+        <div class="compose-disabled">
+          <span class="compose-disabled-hint">outbound disabled —</span>
+          <input type="text" id="counter-sid-input" placeholder="paste their sid|key to enable outbound...">
+          <button onclick="addCounterSid('${chat.id}')">add</button>
+        </div>`;
+    }
   }
+}
+
+function renderDirectHeader(chat, shareStr) {
+  const encBadge = chat.theirPublicKeyB64
+    ? '<span class="id-badge" style="color:var(--green);border-color:var(--green)">e2e</span>' : '';
+  const rrDisabled = !chat.theirPublicKeyB64 ? 'disabled title="requires e2e encryption"' : '';
+  const { messages: allMessages } = LS.load();
+  const hasIncoming = (allMessages[chat.id] || []).some(m => m.dir === 'in');
+  const shareSection = !hasIncoming ? `
+      <div class="ch-id-group">
+        <span class="id-badge sid">share to receive</span>
+        <span class="id-val">${trunc(chat.sid)}</span>
+        <button onclick="copyText('${shareStr.replace(/'/g, "\\'")}')">copy</button>
+      </div>` : '';
+  document.getElementById('chat-header').innerHTML = `
+    <div class="ch-name">${esc(chat.name)} ${encBadge}</div>
+    <div class="ch-ids">
+      ${shareSection}
+      <label style="display:flex;align-items:center;gap:5px;color:var(--dim);font-size:11px;cursor:pointer;flex-shrink:0;">
+        <input type="checkbox" ${chat.readReceipts ? 'checked' : ''} ${rrDisabled} onchange="toggleReadReceipts('${chat.id}')"> read receipts
+      </label>
+    </div>`;
+}
+
+function renderGroupHeader(chat, shareStr) {
+  const memberTags = chat.members.map(m =>
+    `<span class="member-tag" title="${esc(m.sid)}">${esc(m.knownAs || trunc(m.sid))}</span>`
+  ).join('');
+
+  document.getElementById('chat-header').innerHTML = `
+    <div class="ch-name">${esc(chat.name)} <span style="color:var(--dim);font-size:11px">group · ${chat.members.length}</span></div>
+    <div class="ch-ids">
+      <div class="ch-id-group">
+        <span class="id-badge sid">share to join</span>
+        <span class="id-val">${trunc(chat.sid)}</span>
+        <button onclick="copyText('${shareStr.replace(/'/g, "\\'")}')">copy</button>
+      </div>
+      <button onclick="toggleAddMemberForm('${chat.id}')">+ add</button>
+    </div>
+    <div class="group-members">${memberTags}</div>
+    <div id="add-member-form" style="display:none;" class="add-member-form">
+      <input type="text" id="add-member-key" placeholder="their sid|key...">
+      <div class="row">
+        <button class="primary" onclick="addGroupMember('${chat.id}')" style="flex:1;">add</button>
+        <button onclick="toggleAddMemberForm('${chat.id}')">cancel</button>
+      </div>
+    </div>`;
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -481,18 +575,33 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('collapsed');
 }
 
+function toggleGroupFields() {
+  const isGroup = document.getElementById('new-chat-group').checked;
+  document.getElementById('new-chat-myname').style.display = isGroup ? 'block' : 'none';
+}
+
 function toggleNewChatForm(show) {
   const form = document.getElementById('new-chat-form');
   const visible = show !== undefined ? show : form.style.display === 'none';
   form.style.display = visible ? 'flex' : 'none';
-  if (visible) setTimeout(() => document.getElementById('new-chat-name')?.focus(), 0);
-  else document.getElementById('new-chat-name').value = '';
+  if (visible) {
+    setTimeout(() => document.getElementById('new-chat-name')?.focus(), 0);
+  } else {
+    document.getElementById('new-chat-name').value = '';
+    document.getElementById('new-chat-group').checked = false;
+    document.getElementById('new-chat-myname').value = '';
+    document.getElementById('new-chat-myname').style.display = 'none';
+  }
 }
 
 async function newChat() {
-  const nameEl = document.getElementById('new-chat-name');
-  const name = nameEl?.value.trim();
+  const nameEl   = document.getElementById('new-chat-name');
+  const isGroup  = document.getElementById('new-chat-group').checked;
+  const myNameEl = document.getElementById('new-chat-myname');
+  const name     = nameEl?.value.trim();
+  const myName   = myNameEl?.value.trim();
   if (!name) return;
+  if (isGroup && !myName) { notify('enter your name for the group', 'var(--red)'); myNameEl.focus(); return; }
 
   try {
     const [res, { privateKeyJwk, publicKeyB64 }] = await Promise.all([
@@ -504,16 +613,23 @@ async function newChat() {
 
     const chatId = crypto.randomUUID();
     const s = LS.load();
-    s.chats.push({
-      id:            chatId,
-      name,
-      rid:           recipient_id,
-      sid:           sender_id,
-      counterSid:    null,
-      privateKeyJwk,
-      publicKeyB64,
-      createdAt:     Date.now(),
-    });
+
+    if (isGroup) {
+      s.chats.push({
+        id: chatId, name, type: 'group', myName,
+        rid: recipient_id, sid: sender_id,
+        privateKeyJwk, publicKeyB64,
+        members: [],
+        createdAt: Date.now(),
+      });
+    } else {
+      s.chats.push({
+        id: chatId, name, type: 'direct',
+        rid: recipient_id, sid: sender_id,
+        counterSid: null, privateKeyJwk, publicKeyB64,
+        createdAt: Date.now(),
+      });
+    }
     LS.save(s);
 
     toggleNewChatForm(false);
@@ -527,20 +643,48 @@ async function newChat() {
 async function sendMessage() {
   const s = LS.load();
   const chat = s.chats.find(c => c.id === currentChatId);
-  if (!chat?.counterSid) return;
 
   const input = document.getElementById('msg-input');
   const text  = input?.value.trim();
   if (!text) return;
 
   try {
-    const payload = chat.theirPublicKeyB64 ? await eciesEncrypt(chat.theirPublicKeyB64, text) : text;
-    const res = await fetch(`${SERVER}/send/${chat.counterSid}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message: payload }),
-    });
-    if (!res.ok) throw new Error((await res.json()).error || res.status);
+    if (chat.type === 'group') {
+      if (!chat.members.length) return;
+      const payload = JSON.stringify({ from: chat.myName, text });
+      await Promise.all(chat.members.map(async member => {
+        const encrypted = await eciesEncrypt(member.publicKeyB64, payload);
+        const res = await fetch(`${SERVER}/send/${member.sid}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: encrypted }),
+        });
+        if (!res.ok) throw new Error(`failed to send to ${member.name}`);
+      }));
+    } else {
+      if (!chat.counterSid) return;
+      let msgId = null;
+      let sendPayload;
+      if (chat.theirPublicKeyB64) {
+        msgId = crypto.randomUUID();
+        sendPayload = await eciesEncrypt(chat.theirPublicKeyB64, JSON.stringify({ type: 'msg', msgId, text }));
+      } else {
+        sendPayload = text;
+      }
+      const res = await fetch(`${SERVER}/send/${chat.counterSid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: sendPayload }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || res.status);
+      if (!s.messages[chat.id]) s.messages[chat.id] = [];
+      s.messages[chat.id].push({ text, ts: Date.now(), dir: 'out', ...(msgId && { msgId, delivered: false }) });
+      LS.save(s);
+      input.value = '';
+      renderChatList();
+      renderChatView();
+      return;
+    }
 
     if (!s.messages[chat.id]) s.messages[chat.id] = [];
     s.messages[chat.id].push({ text, ts: Date.now(), dir: 'out' });
@@ -572,11 +716,60 @@ function addCounterSid(chatId) {
   notify(theirPubKeyB64 ? 'outbound enabled (e2e encrypted)' : 'outbound enabled', 'var(--green)');
 }
 
+function toggleAddMemberForm(chatId) {
+  const form = document.getElementById('add-member-form');
+  if (!form) return;
+  const visible = form.style.display === 'none';
+  form.style.display = visible ? 'flex' : 'none';
+  if (visible) setTimeout(() => document.getElementById('add-member-name')?.focus(), 0);
+}
+
+function addGroupMember(chatId) {
+  const keyEl = document.getElementById('add-member-key');
+  const raw   = keyEl?.value.trim();
+  if (!raw) { notify('paste their sid|key', 'var(--red)'); return; }
+
+  const [sid, publicKeyB64] = raw.split('|');
+  if (!sid || !publicKeyB64) { notify('paste their full sid|key string', 'var(--red)'); return; }
+
+  const s    = LS.load();
+  const chat = s.chats.find(c => c.id === chatId);
+  if (!chat) return;
+
+  if (chat.members.some(m => m.sid === sid)) { notify('member already added', 'var(--yellow)'); return; }
+
+  chat.members.push({ id: crypto.randomUUID(), sid, publicKeyB64 });
+  LS.save(s);
+  renderChatView();
+  notify('member added', 'var(--green)');
+}
+
+function toggleReadReceipts(chatId) {
+  const s = LS.load();
+  const chat = s.chats.find(c => c.id === chatId);
+  if (!chat) return;
+  chat.readReceipts = !chat.readReceipts;
+  LS.save(s);
+  notify(`read receipts ${chat.readReceipts ? 'on' : 'off'}`, 'var(--dim)');
+}
+
+async function sendAck(chat, msgIds) {
+  try {
+    const encrypted = await eciesEncrypt(chat.theirPublicKeyB64, JSON.stringify({ type: 'ack', msgIds }));
+    await fetch(`${SERVER}/send/${chat.counterSid}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: encrypted }),
+    });
+  } catch (_) {}
+}
+
 // ── Polling ───────────────────────────────────────────────────────────────────
 
 async function pollAll() {
   const s = LS.load();
   let newCount = 0;
+  let ackCount = 0;
 
   for (const chat of s.chats) {
     try {
@@ -585,24 +778,54 @@ async function pollAll() {
       const { messages } = await res.json();
       if (messages?.length) {
         if (!s.messages[chat.id]) s.messages[chat.id] = [];
+        const incomingMsgIds = [];
         for (const raw of messages) {
           let text = raw;
+          let from = null;
+          let msgId = null;
+          let isAck = false;
           if (chat.privateKeyJwk) {
-            try { text = await eciesDecrypt(chat.privateKeyJwk, raw); }
-            catch (_) { text = '[decryption failed]'; }
+            try {
+              const decrypted = await eciesDecrypt(chat.privateKeyJwk, raw);
+              try {
+                const parsed = JSON.parse(decrypted);
+                if (parsed.type === 'ack' && parsed.msgIds) {
+                  for (const id of parsed.msgIds) {
+                    const m = (s.messages[chat.id] || []).find(m => m.msgId === id);
+                    if (m) m.delivered = true;
+                  }
+                  isAck = true; ackCount++;
+                } else if (parsed.type === 'msg') {
+                  text = parsed.text; msgId = parsed.msgId || null;
+                } else if (parsed.from && parsed.text) {
+                  from = parsed.from; text = parsed.text;
+                } else { text = decrypted; }
+              } catch { text = decrypted; }
+            } catch { text = '[decryption failed]'; }
           }
-          s.messages[chat.id].push({ text, ts: Date.now(), dir: 'in' });
+          if (isAck) continue;
+          if (msgId) incomingMsgIds.push(msgId);
+          if (from && chat.type === 'group') {
+            const member = chat.members.find(m => !m.knownAs);
+            if (member && !chat.members.some(m => m.knownAs === from)) member.knownAs = from;
+          }
+          s.messages[chat.id].push({ text, from, ts: Date.now(), dir: 'in', msgId });
           newCount++;
+        }
+        if (chat.readReceipts && chat.counterSid && chat.theirPublicKeyB64 && incomingMsgIds.length) {
+          sendAck(chat, incomingMsgIds);
         }
       }
     } catch (_) {}
   }
 
-  if (newCount) {
+  if (newCount || ackCount) {
     LS.save(s);
-    renderChatList();
     if (currentChatId) renderChatView();
-    notify(`${newCount} new message${newCount > 1 ? 's' : ''}`, 'var(--accent)');
+    if (newCount) {
+      renderChatList();
+      notify(`${newCount} new message${newCount > 1 ? 's' : ''}`, 'var(--accent)');
+    }
   }
 
   document.getElementById('poll-status').textContent =
