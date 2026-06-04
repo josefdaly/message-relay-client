@@ -318,6 +318,61 @@ function copyText(text) {
   navigator.clipboard.writeText(text).then(() => notify('copied', 'var(--green)'));
 }
 
+// ── Crypto ────────────────────────────────────────────────────────────────────
+
+async function generateKeyPair() {
+  const kp = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']
+  );
+  const privateKeyJwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  const pubRaw = await crypto.subtle.exportKey('raw', kp.publicKey);
+  const publicKeyB64 = btoa(String.fromCharCode(...new Uint8Array(pubRaw)));
+  return { privateKeyJwk, publicKeyB64 };
+}
+
+async function eciesEncrypt(recipientPublicKeyB64, plaintext) {
+  const ephemeral = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']
+  );
+  const recipientPubRaw = Uint8Array.from(atob(recipientPublicKeyB64), c => c.charCodeAt(0));
+  const recipientPublicKey = await crypto.subtle.importKey(
+    'raw', recipientPubRaw, { name: 'ECDH', namedCurve: 'P-256' }, false, []
+  );
+  const aesKey = await crypto.subtle.deriveKey(
+    { name: 'ECDH', public: recipientPublicKey },
+    ephemeral.privateKey,
+    { name: 'AES-GCM', length: 256 }, false, ['encrypt']
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, new TextEncoder().encode(plaintext));
+  const ephPubRaw = await crypto.subtle.exportKey('raw', ephemeral.publicKey);
+  // layout: ephemeral_pub (65) || iv (12) || ciphertext
+  const combined = new Uint8Array(65 + 12 + ct.byteLength);
+  combined.set(new Uint8Array(ephPubRaw), 0);
+  combined.set(iv, 65);
+  combined.set(new Uint8Array(ct), 77);
+  return btoa(String.fromCharCode(...combined));
+}
+
+async function eciesDecrypt(privateKeyJwk, b64) {
+  const data = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const privateKey = await crypto.subtle.importKey(
+    'jwk', privateKeyJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']
+  );
+  const ephPublicKey = await crypto.subtle.importKey(
+    'raw', data.slice(0, 65), { name: 'ECDH', namedCurve: 'P-256' }, false, []
+  );
+  const aesKey = await crypto.subtle.deriveKey(
+    { name: 'ECDH', public: ephPublicKey },
+    privateKey,
+    { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+  );
+  const pt = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: data.slice(65, 77) }, aesKey, data.slice(77)
+  );
+  return new TextDecoder().decode(pt);
+}
+
 // ── Chat list ─────────────────────────────────────────────────────────────────
 
 function renderChatList() {
@@ -368,13 +423,15 @@ function renderChatView() {
   document.getElementById('chat-view').style.display   = 'flex';
 
   // header
+  const shareStr = chat.publicKeyB64 ? `${chat.sid}|${chat.publicKeyB64}` : chat.sid;
+  const encBadge = chat.theirPublicKeyB64 ? '<span class="id-badge" style="color:var(--green);border-color:var(--green)">e2e</span>' : '';
   document.getElementById('chat-header').innerHTML = `
-    <div class="ch-name">${esc(chat.name)}</div>
+    <div class="ch-name">${esc(chat.name)} ${encBadge}</div>
     <div class="ch-ids">
       <div class="ch-id-group">
         <span class="id-badge sid">share to receive</span>
         <span class="id-val">${trunc(chat.sid)}</span>
-        <button onclick="copyText('${chat.sid}')">copy</button>
+        <button onclick="copyText('${shareStr.replace(/'/g, "\\'")}')">copy</button>
       </div>
     </div>`;
 
@@ -412,7 +469,7 @@ function renderChatView() {
     composeEl.innerHTML = `
       <div class="compose-disabled">
         <span class="compose-disabled-hint">outbound disabled —</span>
-        <input type="text" id="counter-sid-input" placeholder="paste their sid to enable outbound...">
+        <input type="text" id="counter-sid-input" placeholder="paste their sid|key to enable outbound...">
         <button onclick="addCounterSid('${chat.id}')">add</button>
       </div>`;
   }
@@ -438,19 +495,24 @@ async function newChat() {
   if (!name) return;
 
   try {
-    const res = await fetch(`${SERVER}/queue`, { method: 'POST' });
+    const [res, { privateKeyJwk, publicKeyB64 }] = await Promise.all([
+      fetch(`${SERVER}/queue`, { method: 'POST' }),
+      generateKeyPair(),
+    ]);
     if (!res.ok) throw new Error('server error');
     const { sender_id, recipient_id } = await res.json();
 
     const chatId = crypto.randomUUID();
     const s = LS.load();
     s.chats.push({
-      id:         chatId,
-      name:       name.trim(),
-      rid:        recipient_id,
-      sid:        sender_id,
-      counterSid: null,
-      createdAt:  Date.now(),
+      id:            chatId,
+      name,
+      rid:           recipient_id,
+      sid:           sender_id,
+      counterSid:    null,
+      privateKeyJwk,
+      publicKeyB64,
+      createdAt:     Date.now(),
     });
     LS.save(s);
 
@@ -472,10 +534,11 @@ async function sendMessage() {
   if (!text) return;
 
   try {
+    const payload = chat.theirPublicKeyB64 ? await eciesEncrypt(chat.theirPublicKeyB64, text) : text;
     const res = await fetch(`${SERVER}/send/${chat.counterSid}`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message: text }),
+      body:    JSON.stringify({ message: payload }),
     });
     if (!res.ok) throw new Error((await res.json()).error || res.status);
 
@@ -493,17 +556,20 @@ async function sendMessage() {
 
 function addCounterSid(chatId) {
   const input = document.getElementById('counter-sid-input');
-  const sid   = input?.value.trim();
-  if (!sid) return;
+  const raw   = input?.value.trim();
+  if (!raw) return;
 
   const s    = LS.load();
   const chat = s.chats.find(c => c.id === chatId);
   if (!chat) return;
 
-  chat.counterSid = sid;
+  const [sid, theirPubKeyB64] = raw.split('|');
+  chat.counterSid        = sid;
+  chat.theirPublicKeyB64 = theirPubKeyB64 || null;
+
   LS.save(s);
   renderChatView();
-  notify('outbound enabled', 'var(--green)');
+  notify(theirPubKeyB64 ? 'outbound enabled (e2e encrypted)' : 'outbound enabled', 'var(--green)');
 }
 
 // ── Polling ───────────────────────────────────────────────────────────────────
@@ -519,7 +585,12 @@ async function pollAll() {
       const { messages } = await res.json();
       if (messages?.length) {
         if (!s.messages[chat.id]) s.messages[chat.id] = [];
-        for (const text of messages) {
+        for (const raw of messages) {
+          let text = raw;
+          if (chat.privateKeyJwk) {
+            try { text = await eciesDecrypt(chat.privateKeyJwk, raw); }
+            catch (_) { text = '[decryption failed]'; }
+          }
           s.messages[chat.id].push({ text, ts: Date.now(), dir: 'in' });
           newCount++;
         }
