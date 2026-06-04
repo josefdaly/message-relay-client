@@ -1,1 +1,1 @@
-export const SERVER = 'http://137.184.117.89:5000';
+export const SERVER = 'https://relay-server.joe-web.net';
