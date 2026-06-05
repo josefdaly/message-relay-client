@@ -3,7 +3,7 @@ import { state } from './state.js';
 import { esc, fullTs, shortTs, trunc } from './helpers.js';
 
 export function renderChatList() {
-  const { chats, messages } = LS.load();
+  const { chats, messages, lastSeen } = LS.load();
   const el = document.getElementById('chat-list');
 
   if (!chats.length) {
@@ -14,6 +14,7 @@ export function renderChatList() {
   el.innerHTML = chats.map(chat => {
     const msgs = messages[chat.id] || [];
     const last = msgs[msgs.length - 1];
+    const unread = msgs.length > (lastSeen[chat.id] || 0);
     const active = chat.id === state.currentChatId ? ' active' : '';
     const prefix = chat.type === 'group' ? '# ' : '';
     const previewText = last
@@ -22,7 +23,7 @@ export function renderChatList() {
     const preview = previewText
       ? esc(previewText)
       : '<span style="font-style:italic">no messages</span>';
-    return `<div class="chat-item${active}" onclick="openChat('${chat.id}')">
+    return `<div class="chat-item${active}${unread && !active ? ' unread' : ''}" onclick="openChat('${chat.id}')">
       <div class="chat-item-top">
         <span class="ci-name">${prefix}${esc(chat.name)}</span>
         ${last ? `<span class="ci-time">${shortTs(last.ts)}</span>` : ''}
@@ -33,6 +34,9 @@ export function renderChatList() {
 }
 
 export function openChat(id) {
+  const s = LS.load();
+  s.lastSeen[id] = (s.messages[id] || []).length;
+  LS.save(s);
   state.currentChatId = id;
   renderChatList();
   renderChatView();

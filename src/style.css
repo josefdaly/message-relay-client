@@ -83,7 +83,8 @@ body {
 .ci-name { color: var(--bright); font-size: 13px; }
 .ci-time { color: var(--dim); font-size: 10px; }
 .ci-preview { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ci-preview.unread { color: var(--text); }
+.chat-item.unread .ci-name { color: #ffffff; font-weight: bold; }
+.chat-item.unread .ci-preview { color: var(--text); }
 
 /* ── Main ── */
 #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
