@@ -9,6 +9,6 @@ export const LS = {
   save(s) {
     localStorage.setItem('chats',    JSON.stringify(s.chats));
     localStorage.setItem('messages', JSON.stringify(s.messages));
-    localStorage.setItem('lastSeen', JSON.stringify(s.lastSeen));
+    localStorage.setItem('lastSeen', JSON.stringify(s.lastSeen ?? {}));
   },
 };
